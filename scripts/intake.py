@@ -33,7 +33,7 @@ from scripts.github_client import (
     add_labels,
     post_comment,
 )
-from scripts.devin_client import triage_issue, create_fix_task
+from scripts.devin_client import triage_issue, create_fix_task, extract_triage_fields
 from scripts.prompt_templates import TRIAGE_PROMPT, FIX_PROMPT
 
 # --------------- Logging ---------------
@@ -220,14 +220,21 @@ def run() -> None:
         triage = triage_issue(prompt)
     except (ValueError, json.JSONDecodeError) as exc:
         # Devin returned something that is not valid JSON.
-        logger.error("Triage JSON parse failed: %s", exc)
-        post_comment(
-            REPO_FULL_NAME,
-            ISSUE_NUMBER,
-            "⚠️ **Triage failed** — Devin returned invalid JSON. "
-            "A maintainer will triage this issue manually.",
-        )
-        return
+        # Fall back to OpenAI extraction from the raw response.
+        logger.warning("Triage JSON parse failed: %s — trying OpenAI extraction", exc)
+        try:
+            raw_text = getattr(exc, "raw_text", "") or str(exc)
+            triage = extract_triage_fields(raw_text)
+        except Exception as extract_exc:
+            logger.error("OpenAI extraction also failed: %s", extract_exc)
+            post_comment(
+                REPO_FULL_NAME,
+                ISSUE_NUMBER,
+                "⚠️ **Triage failed** — Devin returned invalid JSON and "
+                "the OpenAI extraction fallback also failed. "
+                "A maintainer will triage this issue manually.",
+            )
+            return
     except Exception as exc:
         logger.error("Triage request failed: %s", exc)
         post_comment(

@@ -17,6 +17,7 @@ import os
 import json
 import logging
 import requests
+import openai
 
 # --------------- Setup ---------------
 logger = logging.getLogger(__name__)
@@ -24,6 +25,9 @@ logger = logging.getLogger(__name__)
 DEVIN_SERVICE_TOKEN = os.environ.get("DEVIN_SERVICE_TOKEN", "")
 DEVIN_API_BASE_URL = os.environ.get("DEVIN_API_BASE_URL", "https://api.devin.ai")
 DEVIN_ORG_ID = os.environ.get("DEVIN_ORG_ID", "")  # e.g. "cole-paris-demo"
+
+# OpenAI client for structured extraction fallback.
+_openai_client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
 
 # Reusable session with the service-user Bearer token.
 _session = requests.Session()
@@ -71,6 +75,61 @@ def _parse_json_from_text(text: str) -> dict:
     return json.loads(cleaned)  # raises ValueError / JSONDecodeError on failure
 
 
+# --------------- Extraction fallback ---------------
+
+_EXTRACTION_PROMPT = """\
+Extract structured triage data from the text below. Return ONLY valid JSON
+matching this schema exactly (no extra keys, no comments):
+
+{{
+  "summary": "<one-sentence summary>",
+  "category": "bug" | "feature" | "chore",
+  "severity": "low" | "medium" | "high" | "critical",
+  "effort": "S" | "M" | "L",
+  "confidence": <float 0-1>,
+  "needs_info": [<list of strings>],
+  "repro_steps": [<list of strings>],
+  "suggested_labels": [<list of strings>],
+  "recommended_next_action": "ask_for_info" | "ready_for_dev" | "defer" | "devin_fix",
+  "devin_fix_plan": [<list of strings>],
+  "risks": [<list of strings>]
+}}
+
+If a field cannot be determined, use a sensible default (empty list, "medium",
+0.5, etc.).  Do NOT invent information that isn't in the text.
+
+Text:
+---
+{raw_text}
+---
+"""
+
+
+def extract_triage_fields(raw_text: str) -> dict:
+    """
+    Use OpenAI to extract structured triage JSON from Devin's free-text response.
+    This is a fallback for when Devin does not return parseable JSON directly.
+
+    Raises:
+        ValueError – if extraction still fails to produce valid JSON.
+    """
+    logger.info("Running OpenAI extraction fallback (%d chars of input)", len(raw_text))
+
+    resp = _openai_client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "user", "content": _EXTRACTION_PROMPT.format(raw_text=raw_text)}
+        ],
+        temperature=0,
+        response_format={"type": "json_object"},
+    )
+
+    content = resp.choices[0].message.content
+    result = json.loads(content)  # guaranteed valid JSON by response_format
+    logger.info("Extraction fallback succeeded")
+    return result
+
+
 # --------------- Public API ---------------
 
 def triage_issue(prompt: str) -> dict:
@@ -101,7 +160,12 @@ def triage_issue(prompt: str) -> dict:
     # TODO: adjust the key below once you know the real response shape.
     raw_text = data.get("structured_output") or data.get("output") or data.get("result", "")
 
-    triage = _parse_json_from_text(raw_text)
+    try:
+        triage = _parse_json_from_text(raw_text)
+    except (ValueError, json.JSONDecodeError) as exc:
+        # Attach the raw text so callers can attempt extraction fallback.
+        exc.raw_text = raw_text
+        raise
     logger.info("Triage result parsed successfully")
     return triage
 

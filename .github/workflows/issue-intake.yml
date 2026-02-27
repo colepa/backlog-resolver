@@ -49,6 +49,7 @@ jobs:
           DEVIN_API_BASE_URL: ${{ secrets.DEVIN_API_BASE_URL }}
           DEVIN_ORG_ID: ${{ secrets.DEVIN_ORG_ID }}
           DEVIN_FIX_ENABLED: ${{ secrets.DEVIN_FIX_ENABLED || 'true' }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           REPO_FULL_NAME: ${{ github.repository }}
         run: python -m scripts.intake

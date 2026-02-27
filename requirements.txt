@@ -1,2 +1,5 @@
 # Core dependency for GitHub & Devin API calls
 requests>=2.31,<3
+
+# OpenAI – used as fallback to extract structured triage from free text
+openai>=1.0,<2
