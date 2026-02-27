@@ -39,9 +39,9 @@ _session.headers.update(
 # Docs: https://docs.devin.ai  (org scope)
 # The service-user token identifies the org — no org name in the URL.
 # ------------------------------------------------------------------
-_TRIAGE_ENDPOINT = "/v3/organizations/sessions"
-_FIX_TASK_ENDPOINT = "/v3/organizations/sessions"
-_POLL_TASK_ENDPOINT = "/v3/organizations/sessions/{session_id}"
+_TRIAGE_ENDPOINT = "/v3/organizations/cole-paris-demo/sessions"
+_FIX_TASK_ENDPOINT = "/v3/organizations/cole-paris-demo/sessions"
+_POLL_TASK_ENDPOINT = "/v3/organizations/cole-paris-demo/sessions/{session_id}"
 
 
 # --------------- Helpers ---------------
