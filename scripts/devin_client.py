@@ -35,12 +35,13 @@ _session.headers.update(
 )
 
 # ------------------------------------------------------------------
-# TODO: Update these paths when Devin publishes final API docs.
-#       Only change the strings below — no other code needs editing.
+# Devin v3 Organization API endpoints.
+# Docs: https://docs.devin.ai  (org scope)
+# The service-user token identifies the org — no org name in the URL.
 # ------------------------------------------------------------------
-_TRIAGE_ENDPOINT = "sessions"
-_FIX_TASK_ENDPOINT = "sessions"
-_POLL_TASK_ENDPOINT = "sessions/{session_id}"
+_TRIAGE_ENDPOINT = "/v3/organizations/sessions"
+_FIX_TASK_ENDPOINT = "/v3/organizations/sessions"
+_POLL_TASK_ENDPOINT = "/v3/organizations/sessions/{session_id}"
 
 
 # --------------- Helpers ---------------
