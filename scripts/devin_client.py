@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 DEVIN_SERVICE_TOKEN = os.environ.get("DEVIN_SERVICE_TOKEN", "")
 DEVIN_API_BASE_URL = os.environ.get("DEVIN_API_BASE_URL", "https://api.devin.ai")
+DEVIN_ORG_ID = os.environ.get("DEVIN_ORG_ID", "")  # e.g. "cole-paris-demo"
 
 # Reusable session with the service-user Bearer token.
 _session = requests.Session()
@@ -39,16 +40,17 @@ _session.headers.update(
 # Docs: https://docs.devin.ai  (org scope)
 # The service-user token identifies the org — no org name in the URL.
 # ------------------------------------------------------------------
-_TRIAGE_ENDPOINT = "/v3/organizations/cole-paris-demo/sessions"
-_FIX_TASK_ENDPOINT = "/v3/organizations/cole-paris-demo/sessions"
-_POLL_TASK_ENDPOINT = "/v3/organizations/cole-paris-demo/sessions/{session_id}"
+_TRIAGE_ENDPOINT = "/v3/organizations/{org_id}/sessions"
+_FIX_TASK_ENDPOINT = "/v3/organizations/{org_id}/sessions"
+_POLL_TASK_ENDPOINT = "/v3/organizations/{org_id}/sessions/{session_id}"
 
 
 # --------------- Helpers ---------------
 
-def _url(path: str) -> str:
-    """Build a full Devin API URL."""
-    return f"{DEVIN_API_BASE_URL.rstrip('/')}{path}"
+def _url(path: str, **kwargs) -> str:
+    """Build a full Devin API URL, filling in {org_id} and any extras."""
+    filled = path.format(org_id=DEVIN_ORG_ID, **kwargs)
+    return f"{DEVIN_API_BASE_URL.rstrip('/')}{filled}"
 
 
 def _parse_json_from_text(text: str) -> dict:
@@ -152,7 +154,7 @@ def poll_task(session_id: str) -> dict:
     """
     logger.info("Polling Devin task %s", session_id)
 
-    url = _url(_POLL_TASK_ENDPOINT.format(session_id=session_id))
+    url = _url(_POLL_TASK_ENDPOINT, session_id=session_id)
     resp = _session.get(url)
     resp.raise_for_status()
 

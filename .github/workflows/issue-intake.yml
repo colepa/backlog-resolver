@@ -47,6 +47,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DEVIN_SERVICE_TOKEN: ${{ secrets.DEVIN_SERVICE_TOKEN }}
           DEVIN_API_BASE_URL: ${{ secrets.DEVIN_API_BASE_URL }}
+          DEVIN_ORG_ID: ${{ secrets.DEVIN_ORG_ID }}
           DEVIN_FIX_ENABLED: ${{ secrets.DEVIN_FIX_ENABLED || 'true' }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           REPO_FULL_NAME: ${{ github.repository }}
