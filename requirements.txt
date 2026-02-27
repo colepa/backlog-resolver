@@ -1,0 +1,2 @@
+# Core dependency for GitHub & Devin API calls
+requests>=2.31,<3
