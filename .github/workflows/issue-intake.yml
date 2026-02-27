@@ -50,4 +50,4 @@ jobs:
           DEVIN_FIX_ENABLED: ${{ secrets.DEVIN_FIX_ENABLED || 'true' }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           REPO_FULL_NAME: ${{ github.repository }}
-        run: python scripts/intake.py
+        run: python scripts.intake
