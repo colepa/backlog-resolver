@@ -38,9 +38,9 @@ _session.headers.update(
 # TODO: Update these paths when Devin publishes final API docs.
 #       Only change the strings below — no other code needs editing.
 # ------------------------------------------------------------------
-_TRIAGE_ENDPOINT = "/organizations/sessions"
-_FIX_TASK_ENDPOINT = "/organizations/sessions"
-_POLL_TASK_ENDPOINT = "/organizations/sessions/{session_id}"
+_TRIAGE_ENDPOINT = "sessions"
+_FIX_TASK_ENDPOINT = "sessions"
+_POLL_TASK_ENDPOINT = "sessions/{session_id}"
 
 
 # --------------- Helpers ---------------
