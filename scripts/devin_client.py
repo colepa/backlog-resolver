@@ -15,6 +15,7 @@ intake.py stays untouched.
 
 import os
 import json
+import time
 import logging
 import requests
 import openai
@@ -47,6 +48,11 @@ _session.headers.update(
 _TRIAGE_ENDPOINT = "/v3/organizations/{org_id}/sessions"
 _FIX_TASK_ENDPOINT = "/v3/organizations/{org_id}/sessions"
 _POLL_TASK_ENDPOINT = "/v3/organizations/{org_id}/sessions/{session_id}"
+
+
+_POLL_INTERVAL_SECS = 5
+_MAX_POLL_SECS = 300
+_TERMINAL_STATUSES = {"finished", "stopped", "failed", "error"}
 
 
 # --------------- Helpers ---------------
@@ -130,6 +136,35 @@ def extract_triage_fields(raw_text: str) -> dict:
     return result
 
 
+# --------------- Session polling ---------------
+
+def _poll_session_until_done(session_id: str, timeout: int = _MAX_POLL_SECS) -> dict:
+    """
+    Poll a Devin session until it reaches a terminal state.
+    Returns the full session response dict.
+
+    Raises:
+        TimeoutError – if the session does not finish within *timeout* seconds.
+        requests.HTTPError – on HTTP failures.
+    """
+    url = _url(_POLL_TASK_ENDPOINT, session_id=session_id)
+    deadline = time.monotonic() + timeout
+
+    while time.monotonic() < deadline:
+        resp = _session.get(url)
+        resp.raise_for_status()
+        data = resp.json()
+        status = data.get("status", "").lower()
+        logger.info("Session %s status: %s", session_id, status)
+
+        if status in _TERMINAL_STATUSES:
+            return data
+
+        time.sleep(_POLL_INTERVAL_SECS)
+
+    raise TimeoutError(f"Session {session_id} did not complete within {timeout}s")
+
+
 # --------------- Public API ---------------
 
 def triage_issue(prompt: str) -> dict:
@@ -142,6 +177,7 @@ def triage_issue(prompt: str) -> dict:
     Raises:
         ValueError  – if Devin's response is not valid JSON.
         requests.HTTPError – on HTTP failures.
+        TimeoutError – if the Devin session does not complete in time.
     """
     logger.info("Sending triage prompt to Devin (%d chars)", len(prompt))
 
@@ -151,14 +187,31 @@ def triage_issue(prompt: str) -> dict:
         # "idempotency_key": "...",
     }
 
+    # 1. Create the Devin session.
     resp = _session.post(_url(_TRIAGE_ENDPOINT), json=payload)
     resp.raise_for_status()
+    create_data = resp.json()
 
-    data = resp.json()
+    session_id = create_data.get("session_id") or create_data.get("id")
+    if not session_id:
+        raise ValueError(f"Devin session creation returned no session_id: {create_data}")
+    logger.info("Created Devin triage session: %s", session_id)
 
+    # 2. Poll until the session reaches a terminal state.
+    data = _poll_session_until_done(session_id)
+
+    # 3. Extract the triage output text.
     # Devin may return the structured answer in different fields.
     # TODO: adjust the key below once you know the real response shape.
     raw_text = data.get("structured_output") or data.get("output") or data.get("result", "")
+
+    if not raw_text:
+        # No recognized output field — pass the full response so the
+        # extraction fallback has something meaningful to work with.
+        raw_text = json.dumps(data)
+        logger.warning(
+            "No recognized output field in session response; using full response body"
+        )
 
     try:
         triage = _parse_json_from_text(raw_text)

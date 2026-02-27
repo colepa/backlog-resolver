@@ -235,6 +235,14 @@ def run() -> None:
                 "A maintainer will triage this issue manually.",
             )
             return
+    except TimeoutError as exc:
+        logger.error("Triage session timed out: %s", exc)
+        post_comment(
+            REPO_FULL_NAME,
+            ISSUE_NUMBER,
+            f"⚠️ **Triage failed** — Devin session timed out. Error: `{exc}`",
+        )
+        return
     except Exception as exc:
         logger.error("Triage request failed: %s", exc)
         post_comment(
