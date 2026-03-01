@@ -66,11 +66,10 @@ _session.headers.update(
 # Docs: https://docs.devin.ai  (org scope)
 # The service-user token identifies the org — no org name in the URL.
 # ------------------------------------------------------------------
-# POST endpoints require {org_id} in the path (confirmed working).
-# GET endpoints return 403 with org_id, so we omit it for polling.
-_TRIAGE_ENDPOINT = "/v3/organizations/{org_id}/sessions"
-_FIX_TASK_ENDPOINT = "/v3/organizations/{org_id}/sessions"
-_POLL_TASK_ENDPOINT = "/v3/organizations/sessions/{session_id}"
+# POST and GET both require {org_id} in the path.
+# There is no "get single session" endpoint — polling uses the list
+# endpoint and filters by session_id.
+_SESSIONS_ENDPOINT = "/v3/organizations/{org_id}/sessions"
 
 
 _POLL_INTERVAL_SECS = 5
@@ -182,32 +181,49 @@ def extract_triage_fields(raw_text: str) -> dict:
 
 # --------------- Session polling ---------------
 
+def _find_session_in_list(session_id: str) -> dict | None:
+    """
+    Fetch the session list and return the dict for *session_id*, or None.
+    The Devin API has no single-session GET — we must list and filter.
+    """
+    url = _url(_SESSIONS_ENDPOINT)
+    resp = _session.get(url)
+    _raise_with_details(resp)
+    data = resp.json()
+    for item in data.get("items", []):
+        if item.get("session_id") == session_id:
+            return item
+    return None
+
+
 def _poll_session_until_done(
     session_id: str,
-    poll_url: str | None = None,
     timeout: int = _MAX_POLL_SECS,
 ) -> dict:
     """
     Poll a Devin session until it reaches a terminal state.
-    Returns the full session response dict.
+    Uses the list endpoint and filters by session_id.
 
     Raises:
         TimeoutError – if the session does not finish within *timeout* seconds.
         requests.HTTPError – on HTTP failures.
     """
-    url = poll_url or _url(_POLL_TASK_ENDPOINT, session_id=session_id)
-    logger.info("Polling session %s at %s", session_id, url)
+    url = _url(_SESSIONS_ENDPOINT)
+    logger.info("Polling session %s via list endpoint %s", session_id, url)
     deadline = time.monotonic() + timeout
 
     while time.monotonic() < deadline:
-        resp = _session.get(url)
-        _raise_with_details(resp)
-        data = resp.json()
-        status = data.get("status", "").lower()
+        session = _find_session_in_list(session_id)
+        if session is None:
+            logger.warning("Session %s not found in list — retrying", session_id)
+            time.sleep(_POLL_INTERVAL_SECS)
+            continue
+
+        status = session.get("status", "").lower()
         logger.info("Session %s status: %s", session_id, status)
 
         if status in _TERMINAL_STATUSES:
-            return data
+            return session
 
         time.sleep(_POLL_INTERVAL_SECS)
 
@@ -259,7 +275,7 @@ def triage_issue(prompt: str) -> dict:
         # 1. Create the Devin session.
         #    Disable auto-redirects so requests doesn't strip the Auth header
         #    if the API returns a 3xx pointing at the new session URL.
-        url = _url(_TRIAGE_ENDPOINT)
+        url = _url(_SESSIONS_ENDPOINT)
         logger.info("POST %s", url)
         resp = _session.post(url, json=payload, allow_redirects=False)
         _last_response_body = resp.text
@@ -294,12 +310,8 @@ def triage_issue(prompt: str) -> dict:
             raise ValueError(f"Devin session creation returned no session_id: {create_data}")
         logger.info("Created Devin triage session: %s", session_id)
 
-        # Always use the API endpoint for polling — create_data["url"] is the
-        # web-app URL (app.devin.ai), not the API URL (api.devin.ai).
-        poll_url = _url(_POLL_TASK_ENDPOINT, session_id=session_id)
-
         # 2. Poll until the session reaches a terminal state.
-        data = _poll_session_until_done(session_id, poll_url=poll_url)
+        data = _poll_session_until_done(session_id)
         _last_response_body = json.dumps(data)
 
         # --- Diagnostic: dump every key so we can find the real output field ---
@@ -369,7 +381,7 @@ def create_fix_task(
         # "branch": branch_name,
     }
 
-    resp = _session.post(_url(_FIX_TASK_ENDPOINT), json=payload)
+    resp = _session.post(_url(_SESSIONS_ENDPOINT), json=payload)
     _raise_with_details(resp)
 
     result = resp.json()
@@ -391,12 +403,17 @@ def poll_task(session_id: str) -> dict:
     _validate_config()
     logger.info("Polling Devin task %s", session_id)
 
-    url = _url(_POLL_TASK_ENDPOINT, session_id=session_id)
-    resp = _session.get(url)
-    _raise_with_details(resp)
+    result = _find_session_in_list(session_id)
+    if result is None:
+        return {"status": "unknown", "pr_url": None}
 
-    result = resp.json()
+    pr_url = None
+    for pr in result.get("pull_requests", []):
+        pr_url = pr.get("url") or pr.get("html_url")
+        if pr_url:
+            break
+
     return {
         "status": result.get("status", "unknown"),
-        "pr_url": result.get("pr_url") or result.get("pull_request_url"),
+        "pr_url": pr_url,
     }
