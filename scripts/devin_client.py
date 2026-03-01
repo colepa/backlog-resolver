@@ -67,9 +67,8 @@ _session.headers.update(
 # The service-user token identifies the org — no org name in the URL.
 # ------------------------------------------------------------------
 # POST and GET both require {org_id} in the path.
-# There is no "get single session" endpoint — polling uses the list
-# endpoint and filters by session_id.
 _SESSIONS_ENDPOINT = "/v3/organizations/{org_id}/sessions"
+_SESSION_DETAIL_ENDPOINT = "/v3/organizations/{org_id}/sessions/{session_id}"
 
 
 _POLL_INTERVAL_SECS = 5
@@ -181,16 +180,32 @@ def extract_triage_fields(raw_text: str) -> dict:
 
 # --------------- Session polling ---------------
 
-def _find_session_in_list(session_id: str) -> dict | None:
+def _get_session(session_id: str) -> dict | None:
     """
-    Fetch the session list and return the dict for *session_id*, or None.
-    The Devin API has no single-session GET — we must list and filter.
+    Fetch a single Devin session by ID.
+    Uses the detail endpoint first; falls back to the list endpoint.
     """
+    # Try the single-session GET endpoint.
+    try:
+        url = _url(_SESSION_DETAIL_ENDPOINT, session_id=session_id)
+        resp = _session.get(url)
+        if resp.ok:
+            return resp.json()
+        logger.warning(
+            "Single-session GET returned %s — falling back to list endpoint",
+            resp.status_code,
+        )
+    except Exception as exc:
+        logger.warning("Single-session GET failed (%s) — falling back to list", exc)
+
+    # Fallback: list sessions and filter.
     url = _url(_SESSIONS_ENDPOINT)
     resp = _session.get(url)
     _raise_with_details(resp)
     data = resp.json()
-    for item in data.get("items", []):
+    # The v3 API returns sessions under the "sessions" key.
+    items = data.get("sessions") or data.get("items") or []
+    for item in items:
         if item.get("session_id") == session_id:
             return item
     return None
@@ -208,12 +223,11 @@ def _poll_session_until_done(
         TimeoutError – if the session does not finish within *timeout* seconds.
         requests.HTTPError – on HTTP failures.
     """
-    url = _url(_SESSIONS_ENDPOINT)
-    logger.info("Polling session %s via list endpoint %s", session_id, url)
+    logger.info("Polling session %s (timeout=%ds)", session_id, timeout)
     deadline = time.monotonic() + timeout
 
     while time.monotonic() < deadline:
-        session = _find_session_in_list(session_id)
+        session = _get_session(session_id)
         if session is None:
             logger.warning("Session %s not found in list — retrying", session_id)
             time.sleep(_POLL_INTERVAL_SECS)
@@ -403,7 +417,7 @@ def poll_task(session_id: str) -> dict:
     _validate_config()
     logger.info("Polling Devin task %s", session_id)
 
-    result = _find_session_in_list(session_id)
+    result = _get_session(session_id)
     if result is None:
         return {"status": "unknown", "pr_url": None}
 
