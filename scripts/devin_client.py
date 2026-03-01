@@ -68,12 +68,13 @@ _session.headers.update(
 # ------------------------------------------------------------------
 # POST and GET both require {org_id} in the path.
 _SESSIONS_ENDPOINT = "/v3/organizations/{org_id}/sessions"
-_MESSAGES_ENDPOINT = "/v3/organizations/{org_id}/sessions/{session_id}/messages"
 
 
 _POLL_INTERVAL_SECS = 5
 _MAX_POLL_SECS = 300
 _TERMINAL_STATUSES = {"finished", "completed", "stopped", "failed", "error"}
+# status_detail values that indicate Devin has produced output.
+_DONE_STATUS_DETAILS = {"waiting_for_user"}
 
 
 # --------------- Helpers ---------------
@@ -190,90 +191,57 @@ def _get_session(session_id: str) -> dict | None:
     resp = _session.get(url)
     _raise_with_details(resp)
     data = resp.json()
-    # The v3 API returns sessions under the "sessions" key.
-    items = data.get("sessions") or data.get("items") or []
+    items = data.get("items") or []
     for item in items:
         if item.get("session_id") == session_id:
             return item
     return None
 
 
-def _get_session_messages(session_id: str) -> list[dict]:
-    """
-    Fetch messages for a Devin session.
-    Returns a list of message dicts (may be empty).
-    Each message has: created_at, event_id, message, source.
-    """
-    url = _url(_MESSAGES_ENDPOINT, session_id=session_id)
-    resp = _session.get(url)
-    _raise_with_details(resp)
-    data = resp.json()
-    return data.get("items") or []
-
-
-def _find_devin_response(messages: list[dict]) -> str | None:
-    """
-    Walk messages (newest-first) and return the first response from Devin.
-    Per the API docs, each message has 'source' and 'message' fields.
-    """
-    for msg in reversed(messages):
-        if msg.get("source") != "devin":
-            continue
-        body = msg.get("message", "")
-        if body.strip():
-            return body.strip()
-    return None
-
-
 def _poll_session_until_done(
     session_id: str,
     timeout: int = _MAX_POLL_SECS,
-) -> tuple[dict, str]:
+) -> dict:
     """
-    Poll a Devin session's messages until Devin responds or the session
-    reaches a terminal status.
+    Poll a Devin session until it is done.
+
+    Completion is detected by:
+      - status in _TERMINAL_STATUSES, OR
+      - status_detail in _DONE_STATUS_DETAILS (e.g. "waiting_for_user"
+        means Devin finished and is waiting for input).
+
+    The triage output is returned in the session's 'title' field.
 
     Returns:
-        (session_dict, devin_response_text)
+        The session dict.
 
     Raises:
-        TimeoutError – if no response within *timeout* seconds.
+        TimeoutError – if the session does not finish within *timeout* seconds.
         requests.HTTPError – on HTTP failures.
     """
-    logger.info("Polling session %s messages (timeout=%ds)", session_id, timeout)
+    logger.info("Polling session %s (timeout=%ds)", session_id, timeout)
     deadline = time.monotonic() + timeout
 
     while time.monotonic() < deadline:
-        # Check messages for a Devin response.
-        try:
-            messages = _get_session_messages(session_id)
-            logger.info("Session %s: %d message(s)", session_id, len(messages))
-            devin_text = _find_devin_response(messages)
-            if devin_text:
-                logger.info(
-                    "Session %s: found Devin response (%d chars)",
-                    session_id, len(devin_text),
-                )
-                # Grab session metadata too (best-effort).
-                session_data = _get_session(session_id) or {}
-                return session_data, devin_text
-        except Exception as exc:
-            logger.warning("Messages poll error for %s: %s", session_id, exc)
+        session_data = _get_session(session_id)
+        if session_data is None:
+            logger.warning("Session %s not found in list — retrying", session_id)
+            time.sleep(_POLL_INTERVAL_SECS)
+            continue
 
-        # Also check if the session reached a terminal status (e.g. failed).
-        try:
-            session_data = _get_session(session_id)
-            if session_data:
-                status = session_data.get("status", "").lower()
-                if status in _TERMINAL_STATUSES:
-                    logger.info("Session %s reached terminal status: %s", session_id, status)
-                    return session_data, ""
-        except Exception:
-            pass
+        status = session_data.get("status", "").lower()
+        detail = session_data.get("status_detail", "").lower()
+        logger.info(
+            "Session %s  status=%s  status_detail=%s",
+            session_id, status, detail,
+        )
+
+        if status in _TERMINAL_STATUSES or detail in _DONE_STATUS_DETAILS:
+            return session_data
 
         time.sleep(_POLL_INTERVAL_SECS)
 
-    raise TimeoutError(f"Session {session_id} did not produce a response within {timeout}s")
+    raise TimeoutError(f"Session {session_id} did not complete within {timeout}s")
 
 
 # --------------- Public API ---------------
@@ -356,21 +324,24 @@ def triage_issue(prompt: str) -> dict:
             raise ValueError(f"Devin session creation returned no session_id: {create_data}")
         logger.info("Created Devin triage session: %s", session_id)
 
-        # 2. Poll messages until Devin responds.
-        data, raw_text = _poll_session_until_done(session_id)
-        _last_response_body = raw_text or json.dumps(data)
+        # 2. Poll until the session is done.
+        data = _poll_session_until_done(session_id)
+        _last_response_body = json.dumps(data)
+
+        # 3. Extract triage output.
+        # The Devin API puts the session's output in the 'title' field.
+        raw_text = (
+            data.get("title")
+            or data.get("structured_output")
+            or data.get("output")
+            or data.get("result")
+            or ""
+        )
 
         if not raw_text:
-            # Terminal status reached but no message content found.
-            # Fall back to session-level fields or full response body.
-            raw_text = (
-                data.get("structured_output")
-                or data.get("output")
-                or data.get("result")
-                or json.dumps(data)
-            )
+            raw_text = json.dumps(data)
             logger.warning(
-                "No Devin message found; falling back to session data (%d chars)",
+                "No recognized output field in session response; using full body (%d chars)",
                 len(raw_text),
             )
 
