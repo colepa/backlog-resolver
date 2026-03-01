@@ -30,6 +30,27 @@ DEVIN_ORG_ID = os.environ.get("DEVIN_ORG_ID", "")  # e.g. "cole-paris-demo"
 # OpenAI client for structured extraction fallback.
 _openai_client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""))
 
+
+def _validate_config() -> None:
+    """Fail fast with a clear message if required env vars are missing."""
+    missing = []
+    if not DEVIN_SERVICE_TOKEN:
+        missing.append("DEVIN_SERVICE_TOKEN")
+    if not DEVIN_ORG_ID:
+        missing.append("DEVIN_ORG_ID")
+    if missing:
+        raise RuntimeError(
+            f"Missing required environment variable(s): {', '.join(missing)}. "
+            "Check your GitHub Actions secrets configuration."
+        )
+    # Masked diagnostics — never log the full token.
+    token_preview = DEVIN_SERVICE_TOKEN[:4] + "…" if len(DEVIN_SERVICE_TOKEN) > 4 else "(short)"
+    logger.info(
+        "Devin config — base_url=%s  org_id=%s  token=%s (len=%d)",
+        DEVIN_API_BASE_URL, DEVIN_ORG_ID, token_preview, len(DEVIN_SERVICE_TOKEN),
+    )
+
+
 # Reusable session with the service-user Bearer token.
 _session = requests.Session()
 _session.headers.update(
@@ -61,6 +82,27 @@ def _url(path: str, **kwargs) -> str:
     """Build a full Devin API URL, filling in {org_id} and any extras."""
     filled = path.format(org_id=DEVIN_ORG_ID, **kwargs)
     return f"{DEVIN_API_BASE_URL.rstrip('/')}{filled}"
+
+
+def _raise_with_details(resp: requests.Response) -> None:
+    """Call raise_for_status but include the response body in the error for diagnostics."""
+    try:
+        resp.raise_for_status()
+    except requests.HTTPError as exc:
+        # Capture the response body — APIs often include a reason in JSON.
+        body = ""
+        try:
+            body = resp.text[:500]
+        except Exception:
+            pass
+        logger.error(
+            "HTTP %s from %s %s — body: %s",
+            resp.status_code, resp.request.method, resp.url, body,
+        )
+        raise requests.HTTPError(
+            f"{resp.status_code} {resp.reason} for {resp.url} — response: {body}",
+            response=resp,
+        ) from exc
 
 
 def _parse_json_from_text(text: str) -> dict:
@@ -152,7 +194,7 @@ def _poll_session_until_done(session_id: str, timeout: int = _MAX_POLL_SECS) -> 
 
     while time.monotonic() < deadline:
         resp = _session.get(url)
-        resp.raise_for_status()
+        _raise_with_details(resp)
         data = resp.json()
         status = data.get("status", "").lower()
         logger.info("Session %s status: %s", session_id, status)
@@ -179,6 +221,7 @@ def triage_issue(prompt: str) -> dict:
         requests.HTTPError – on HTTP failures.
         TimeoutError – if the Devin session does not complete in time.
     """
+    _validate_config()
     logger.info("Sending triage prompt to Devin (%d chars)", len(prompt))
 
     payload = {
@@ -188,8 +231,10 @@ def triage_issue(prompt: str) -> dict:
     }
 
     # 1. Create the Devin session.
-    resp = _session.post(_url(_TRIAGE_ENDPOINT), json=payload)
-    resp.raise_for_status()
+    url = _url(_TRIAGE_ENDPOINT)
+    logger.info("POST %s", url)
+    resp = _session.post(url, json=payload)
+    _raise_with_details(resp)
     create_data = resp.json()
 
     session_id = create_data.get("session_id") or create_data.get("id")
@@ -238,6 +283,7 @@ def create_fix_task(
     Raises:
         requests.HTTPError – on HTTP failures.
     """
+    _validate_config()
     logger.info(
         "Creating Devin fix task for %s#%s (branch %s)",
         repo_full_name, issue_number, branch_name,
@@ -251,7 +297,7 @@ def create_fix_task(
     }
 
     resp = _session.post(_url(_FIX_TASK_ENDPOINT), json=payload)
-    resp.raise_for_status()
+    _raise_with_details(resp)
 
     result = resp.json()
     # Normalise the response so callers always get session_id + status.
@@ -269,11 +315,12 @@ def poll_task(session_id: str) -> dict:
     Returns:
         dict with at least {"status": str, "pr_url": str | None}
     """
+    _validate_config()
     logger.info("Polling Devin task %s", session_id)
 
     url = _url(_POLL_TASK_ENDPOINT, session_id=session_id)
     resp = _session.get(url)
-    resp.raise_for_status()
+    _raise_with_details(resp)
 
     result = resp.json()
     return {
