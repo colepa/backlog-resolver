@@ -9,25 +9,29 @@ with a fix. Humans always review before anything is merged.
 ## How It Works
 
 ```
-Issue opened / edited / reopened
+Target repo: issue opened / edited / reopened
         │
         ▼
-┌──────────────────────┐
-│  GitHub Actions       │
-│  issue-intake.yml     │
-└──────────┬───────────┘
-           │  runs
-           ▼
-┌──────────────────────┐     ┌─────────────────┐
-│  scripts/intake.py   │────▶│  Devin API       │
-│  (orchestrator)      │◀────│  (service user)  │
-└──────────┬───────────┘     └─────────────────┘
-           │
-           ▼
-   GitHub Issue updated:
-   • Triage Report comment
-   • Labels applied
-   • (optional) PR opened by Devin
+┌───────────────────────────┐   repository_dispatch
+│  Target repo workflow      │─────────────────────┐
+│  backlog-resolver-dispatch │                      │
+└───────────────────────────┘                      ▼
+                                    ┌──────────────────────┐
+                                    │  backlog-resolver     │
+                                    │  issue-intake.yml     │
+                                    └──────────┬───────────┘
+                                               │  runs
+                                               ▼
+                                    ┌──────────────────────┐     ┌─────────────────┐
+                                    │  scripts/intake.py   │────▶│  Devin API       │
+                                    │  (orchestrator)      │◀────│  (service user)  │
+                                    └──────────┬───────────┘     └─────────────────┘
+                                               │
+                                               ▼
+                                      Target repo issue updated:
+                                      • Triage Report comment
+                                      • Labels applied
+                                      • (optional) PR opened by Devin
 ```
 
 ### A) Triage (always runs)
@@ -58,7 +62,9 @@ If Devin recommends `devin_fix` **and** all of these are true:
 ## Project Structure
 
 ```
-.github/workflows/issue-intake.yml   # GitHub Actions workflow
+.github/workflows/
+  issue-intake.yml                    # main workflow (triggered by dispatch)
+  target-repo-dispatch.yml            # copy this into your target repo
 scripts/
   __init__.py                         # makes scripts a package
   intake.py                           # main entrypoint / orchestrator
@@ -75,23 +81,45 @@ README.md                             # this file
 
 ### 1. Create (or fork) this repository
 
-Push these files to a GitHub repo.
+Push these files to a GitHub repo (e.g. `your-org/backlog-resolver`).
 
-### 2. Add secrets
+### 2. Create a Personal Access Token (PAT)
+
+You need a **fine-grained PAT** (or classic PAT with `repo` scope) that has
+write access to **both** this repo and your target repo. This is used for:
+- Sending `repository_dispatch` events from the target repo → this repo.
+- Reading/writing issues, labels, and PRs on the target repo.
+
+### 3. Add secrets to this repo (backlog-resolver)
 
 Go to **Settings → Secrets and variables → Actions** and add:
 
 | Secret | Description |
 |--------|-------------|
+| `GH_PAT` | PAT from step 2 (cross-repo access) |
 | `DEVIN_SERVICE_TOKEN` | Devin service-user Bearer token |
 | `DEVIN_API_BASE_URL` | Devin API base URL (e.g. `https://api.devin.ai`) |
-
-`GITHUB_TOKEN` is provided automatically by GitHub Actions.
+| `DEVIN_ORG_ID` | Devin organization ID |
+| `OPENAI_API_KEY` | OpenAI API key (used for extraction fallback) |
 
 Optionally add `DEVIN_FIX_ENABLED` set to `false` if you want to disable
 auto-fix and only use triage.
 
-### 3. Create labels (optional)
+### 4. Install the dispatch workflow in your target repo
+
+Copy `.github/workflows/target-repo-dispatch.yml` into your target repo at
+`.github/workflows/backlog-resolver-dispatch.yml`.
+
+Then add a secret to the **target repo**:
+
+| Secret | Description |
+|--------|-------------|
+| `BACKLOG_RESOLVER_PAT` | Same PAT from step 2 |
+
+Edit the `BACKLOG_RESOLVER_REPO` env var in the copied workflow to point to
+this repo (e.g. `your-org/backlog-resolver`).
+
+### 5. Create labels (optional)
 
 The workflow auto-creates labels the first time, but you can pre-create
 them in **Issues → Labels** for nicer colours:
@@ -99,11 +127,13 @@ them in **Issues → Labels** for nicer colours:
 `devin:triaged`, `devin:fix`, `prio:low`, `prio:med`, `prio:high`,
 `prio:critical`, `effort:S`, `effort:M`, `effort:L`, `needs-info`
 
-### 4. Test it
+### 6. Test it
 
-Open a new issue with a clear title and description. Within a minute you
-should see:
-- A **Triage Report** comment posted by the Actions bot.
+Open a new issue **in the target repo** with a clear title and description.
+Within a minute you should see:
+- The dispatch workflow run in the target repo's Actions tab.
+- The intake workflow run in the backlog-resolver repo's Actions tab.
+- A **Triage Report** comment posted on the target repo issue.
 - Labels applied to the issue.
 - (If auto-fix triggered) a follow-up comment with the Devin session link.
 

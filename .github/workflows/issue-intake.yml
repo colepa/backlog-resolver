@@ -1,25 +1,27 @@
 # ---------------------------------------------------------------
 # Issue Intake Workflow
-# Triggers on every new, edited, or reopened issue.
-# Runs a Python script that triages the issue via Devin and
-# optionally queues an auto-fix PR.
+# Receives a repository_dispatch event from a target repo and
+# triages the issue via Devin, optionally queuing an auto-fix PR.
+#
+# Setup:
+#   1. Add a GH_PAT secret (PAT with `repo` scope for the target repo).
+#   2. Install the dispatch workflow in your target repo
+#      (see .github/workflows/target-repo-dispatch.yml).
 # ---------------------------------------------------------------
 name: Issue Intake – Triage & Auto-Fix
 
 on:
-  issues:
-    types: [opened, edited, reopened]
+  repository_dispatch:
+    types: [issue-intake]
 
 # Only allow ONE run at a time per issue number so we never
 # double-label or double-comment on the same issue.
 concurrency:
-  group: issue-intake-${{ github.event.issue.number }}
+  group: issue-intake-${{ github.event.client_payload.repo }}-${{ github.event.client_payload.issue_number }}
   cancel-in-progress: true
 
 permissions:
-  issues: write        # post comments, add labels
-  contents: write      
-  pull-requests: write # create PRs
+  contents: read       # checkout this repo's scripts
 
 jobs:
   triage:
@@ -41,15 +43,16 @@ jobs:
         run: pip install -r requirements.txt
 
       # 4. Run the intake script.
-      #    All config comes from environment variables / secrets.
+      #    GITHUB_TOKEN is a PAT so the script can read/write
+      #    issues, labels, and PRs on the *target* repo.
       - name: Run issue intake
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
           DEVIN_SERVICE_TOKEN: ${{ secrets.DEVIN_SERVICE_TOKEN }}
           DEVIN_API_BASE_URL: ${{ secrets.DEVIN_API_BASE_URL }}
           DEVIN_ORG_ID: ${{ secrets.DEVIN_ORG_ID }}
           DEVIN_FIX_ENABLED: ${{ secrets.DEVIN_FIX_ENABLED || 'true' }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-          REPO_FULL_NAME: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.client_payload.issue_number }}
+          REPO_FULL_NAME: ${{ github.event.client_payload.repo }}
         run: python -m scripts.intake

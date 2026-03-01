@@ -1,0 +1,37 @@
+# ---------------------------------------------------------------
+# Target Repo → Backlog Resolver Dispatch
+# ---------------------------------------------------------------
+# Copy this file into the TARGET repo at:
+#   .github/workflows/backlog-resolver-dispatch.yml
+#
+# Required secrets in the TARGET repo:
+#   BACKLOG_RESOLVER_PAT – a PAT with `repo` scope on the
+#                          backlog-resolver repo (to send the dispatch).
+#
+# Update BACKLOG_RESOLVER_REPO below to match your setup.
+# ---------------------------------------------------------------
+name: Forward issues to Backlog Resolver
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+
+env:
+  # ── Change this to wherever your backlog-resolver repo lives ──
+  BACKLOG_RESOLVER_REPO: coleparis/backlog-resolver
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send repository_dispatch to backlog-resolver
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.BACKLOG_RESOLVER_PAT }}
+          repository: ${{ env.BACKLOG_RESOLVER_REPO }}
+          event-type: issue-intake
+          client-payload: |
+            {
+              "repo": "${{ github.repository }}",
+              "issue_number": ${{ github.event.issue.number }}
+            }
