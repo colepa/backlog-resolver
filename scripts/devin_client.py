@@ -276,6 +276,15 @@ def triage_issue(prompt: str) -> dict:
         data = _poll_session_until_done(session_id, poll_url=poll_url)
         _last_response_body = json.dumps(data)
 
+        # --- Diagnostic: dump every key so we can find the real output field ---
+        for key, val in data.items():
+            preview = str(val)[:200] if val is not None else "None"
+            logger.info(
+                "SESSION RESPONSE  key=%-25s  type=%-10s  preview=%s",
+                key, type(val).__name__, preview,
+            )
+        # --- End diagnostic ---
+
         # 3. Extract the triage output text.
         # Devin may return the structured answer in different fields.
         # TODO: adjust the key below once you know the real response shape.
