@@ -36,8 +36,6 @@ def _validate_config() -> None:
     missing = []
     if not DEVIN_SERVICE_TOKEN:
         missing.append("DEVIN_SERVICE_TOKEN")
-    if not DEVIN_ORG_ID:
-        missing.append("DEVIN_ORG_ID")
     if missing:
         raise RuntimeError(
             f"Missing required environment variable(s): {', '.join(missing)}. "
@@ -66,9 +64,9 @@ _session.headers.update(
 # Docs: https://docs.devin.ai  (org scope)
 # The service-user token identifies the org — no org name in the URL.
 # ------------------------------------------------------------------
-_TRIAGE_ENDPOINT = "/v3/organizations/{org_id}/sessions"
-_FIX_TASK_ENDPOINT = "/v3/organizations/{org_id}/sessions"
-_POLL_TASK_ENDPOINT = "/v3/organizations/{org_id}/sessions/{session_id}"
+_TRIAGE_ENDPOINT = "/v3/organizations/sessions"
+_FIX_TASK_ENDPOINT = "/v3/organizations/sessions"
+_POLL_TASK_ENDPOINT = "/v3/organizations/sessions/{session_id}"
 
 
 _POLL_INTERVAL_SECS = 5
@@ -79,8 +77,8 @@ _TERMINAL_STATUSES = {"finished", "stopped", "failed", "error"}
 # --------------- Helpers ---------------
 
 def _url(path: str, **kwargs) -> str:
-    """Build a full Devin API URL, filling in {org_id} and any extras."""
-    filled = path.format(org_id=DEVIN_ORG_ID, **kwargs)
+    """Build a full Devin API URL, filling in any path parameters."""
+    filled = path.format(**kwargs)
     return f"{DEVIN_API_BASE_URL.rstrip('/')}{filled}"
 
 
