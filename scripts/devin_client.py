@@ -229,8 +229,8 @@ def _poll_session_until_done(
             time.sleep(_POLL_INTERVAL_SECS)
             continue
 
-        status = session_data.get("status", "").lower()
-        detail = session_data.get("status_detail", "").lower()
+        status = (session_data.get("status") or "").lower()
+        detail = (session_data.get("status_detail") or "").lower()
         logger.info(
             "Session %s  status=%s  status_detail=%s",
             session_id, status, detail,
