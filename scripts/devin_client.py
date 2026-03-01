@@ -43,6 +43,18 @@ def _validate_config() -> None:
             f"Missing required environment variable(s): {', '.join(missing)}. "
             "Check your GitHub Actions secrets configuration."
         )
+
+    # Guard against legacy API keys — v3 endpoints require service-user
+    # tokens which start with "cog_".
+    if DEVIN_SERVICE_TOKEN.startswith(("apk_", "apk_user_")):
+        raise RuntimeError(
+            "DEVIN_SERVICE_TOKEN appears to be a legacy API key "
+            f"(starts with '{DEVIN_SERVICE_TOKEN[:4]}…'). "
+            "The v3 API requires a service-user token (starts with 'cog_'). "
+            "Create a service user in Devin Settings → Service users and use "
+            "its token instead."
+        )
+
     # Masked diagnostics — never log the full token.
     token_preview = DEVIN_SERVICE_TOKEN[:4] + "…" if len(DEVIN_SERVICE_TOKEN) > 4 else "(short)"
     logger.info(
