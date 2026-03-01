@@ -68,7 +68,7 @@ _session.headers.update(
 # ------------------------------------------------------------------
 # POST and GET both require {org_id} in the path.
 _SESSIONS_ENDPOINT = "/v3/organizations/{org_id}/sessions"
-_MESSAGES_ENDPOINT = "/v3/organizations/sessions/{session_id}/messages"
+_MESSAGES_ENDPOINT = "/v3/organizations/{org_id}/sessions/{session_id}/messages"
 
 
 _POLL_INTERVAL_SECS = 5
@@ -202,28 +202,24 @@ def _get_session_messages(session_id: str) -> list[dict]:
     """
     Fetch messages for a Devin session.
     Returns a list of message dicts (may be empty).
+    Each message has: created_at, event_id, message, source.
     """
     url = _url(_MESSAGES_ENDPOINT, session_id=session_id)
     resp = _session.get(url)
     _raise_with_details(resp)
     data = resp.json()
-    # Response may be a list directly or wrapped in a key.
-    if isinstance(data, list):
-        return data
-    return data.get("messages") or data.get("items") or []
+    return data.get("items") or []
 
 
 def _find_devin_response(messages: list[dict]) -> str | None:
     """
-    Walk messages (newest-first) and return the first response from Devin
-    that looks like triage output (i.e. not the user's original prompt).
+    Walk messages (newest-first) and return the first response from Devin.
+    Per the API docs, each message has 'source' and 'message' fields.
     """
     for msg in reversed(messages):
-        role = msg.get("role", "").lower()
-        # Skip messages sent by the user / system.
-        if role in ("user", "system", "human"):
+        if msg.get("source") != "devin":
             continue
-        body = msg.get("content") or msg.get("body") or msg.get("text") or ""
+        body = msg.get("message", "")
         if body.strip():
             return body.strip()
     return None
