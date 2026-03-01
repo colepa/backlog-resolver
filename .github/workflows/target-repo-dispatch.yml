@@ -18,7 +18,7 @@ on:
 
 env:
   # ── Change this to wherever your backlog-resolver repo lives ──
-  BACKLOG_RESOLVER_REPO: coleparis/backlog-resolver
+  BACKLOG_RESOLVER_REPO: colepa/backlog-resolver
 
 jobs:
   dispatch:
