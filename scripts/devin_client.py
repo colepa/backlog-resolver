@@ -68,6 +68,7 @@ _session.headers.update(
 # ------------------------------------------------------------------
 # POST and GET both require {org_id} in the path.
 _SESSIONS_ENDPOINT = "/v3/organizations/{org_id}/sessions"
+_MESSAGES_ENDPOINT = "/v3/organizations/sessions/{session_id}/messages"
 
 
 _POLL_INTERVAL_SECS = 5
@@ -179,12 +180,6 @@ def extract_triage_fields(raw_text: str) -> dict:
 
 # --------------- Session polling ---------------
 
-# Output fields that Devin may populate once the work is done.
-# The session status can remain "running" even after output is ready,
-# so we treat non-empty output as an implicit completion signal.
-_OUTPUT_FIELDS = ("structured_output", "output", "result")
-
-
 def _get_session(session_id: str) -> dict | None:
     """
     Fetch a single Devin session by ID from the list endpoint.
@@ -203,38 +198,86 @@ def _get_session(session_id: str) -> dict | None:
     return None
 
 
+def _get_session_messages(session_id: str) -> list[dict]:
+    """
+    Fetch messages for a Devin session.
+    Returns a list of message dicts (may be empty).
+    """
+    url = _url(_MESSAGES_ENDPOINT, session_id=session_id)
+    resp = _session.get(url)
+    _raise_with_details(resp)
+    data = resp.json()
+    # Response may be a list directly or wrapped in a key.
+    if isinstance(data, list):
+        return data
+    return data.get("messages") or data.get("items") or []
+
+
+def _find_devin_response(messages: list[dict]) -> str | None:
+    """
+    Walk messages (newest-first) and return the first response from Devin
+    that looks like triage output (i.e. not the user's original prompt).
+    """
+    for msg in reversed(messages):
+        role = msg.get("role", "").lower()
+        # Skip messages sent by the user / system.
+        if role in ("user", "system", "human"):
+            continue
+        body = msg.get("content") or msg.get("body") or msg.get("text") or ""
+        if body.strip():
+            return body.strip()
+    return None
+
+
 def _poll_session_until_done(
     session_id: str,
     timeout: int = _MAX_POLL_SECS,
-) -> dict:
+) -> tuple[dict, str]:
     """
-    Poll a Devin session until it reaches a terminal state.
-    Uses the list endpoint and filters by session_id.
+    Poll a Devin session's messages until Devin responds or the session
+    reaches a terminal status.
+
+    Returns:
+        (session_dict, devin_response_text)
 
     Raises:
-        TimeoutError – if the session does not finish within *timeout* seconds.
+        TimeoutError – if no response within *timeout* seconds.
         requests.HTTPError – on HTTP failures.
     """
-    logger.info("Polling session %s (timeout=%ds)", session_id, timeout)
+    logger.info("Polling session %s messages (timeout=%ds)", session_id, timeout)
     deadline = time.monotonic() + timeout
 
     while time.monotonic() < deadline:
-        session = _get_session(session_id)
-        if session is None:
-            logger.warning("Session %s not found in list — retrying", session_id)
-            time.sleep(_POLL_INTERVAL_SECS)
-            continue
+        # Check messages for a Devin response.
+        try:
+            messages = _get_session_messages(session_id)
+            logger.info("Session %s: %d message(s)", session_id, len(messages))
+            devin_text = _find_devin_response(messages)
+            if devin_text:
+                logger.info(
+                    "Session %s: found Devin response (%d chars)",
+                    session_id, len(devin_text),
+                )
+                # Grab session metadata too (best-effort).
+                session_data = _get_session(session_id) or {}
+                return session_data, devin_text
+        except Exception as exc:
+            logger.warning("Messages poll error for %s: %s", session_id, exc)
 
-        status = session.get("status", "").lower()
-        has_output = any(session.get(f) for f in _OUTPUT_FIELDS)
-        logger.info("Session %s status: %s  has_output: %s", session_id, status, has_output)
-
-        if status in _TERMINAL_STATUSES or has_output:
-            return session
+        # Also check if the session reached a terminal status (e.g. failed).
+        try:
+            session_data = _get_session(session_id)
+            if session_data:
+                status = session_data.get("status", "").lower()
+                if status in _TERMINAL_STATUSES:
+                    logger.info("Session %s reached terminal status: %s", session_id, status)
+                    return session_data, ""
+        except Exception:
+            pass
 
         time.sleep(_POLL_INTERVAL_SECS)
 
-    raise TimeoutError(f"Session {session_id} did not complete within {timeout}s")
+    raise TimeoutError(f"Session {session_id} did not produce a response within {timeout}s")
 
 
 # --------------- Public API ---------------
@@ -317,30 +360,22 @@ def triage_issue(prompt: str) -> dict:
             raise ValueError(f"Devin session creation returned no session_id: {create_data}")
         logger.info("Created Devin triage session: %s", session_id)
 
-        # 2. Poll until the session reaches a terminal state.
-        data = _poll_session_until_done(session_id)
-        _last_response_body = json.dumps(data)
-
-        # --- Diagnostic: dump every key so we can find the real output field ---
-        for key, val in data.items():
-            preview = str(val)[:200] if val is not None else "None"
-            logger.info(
-                "SESSION RESPONSE  key=%-25s  type=%-10s  preview=%s",
-                key, type(val).__name__, preview,
-            )
-        # --- End diagnostic ---
-
-        # 3. Extract the triage output text.
-        # Devin may return the structured answer in different fields.
-        # TODO: adjust the key below once you know the real response shape.
-        raw_text = data.get("structured_output") or data.get("output") or data.get("result", "")
+        # 2. Poll messages until Devin responds.
+        data, raw_text = _poll_session_until_done(session_id)
+        _last_response_body = raw_text or json.dumps(data)
 
         if not raw_text:
-            # No recognized output field — pass the full response so the
-            # extraction fallback has something meaningful to work with.
-            raw_text = json.dumps(data)
+            # Terminal status reached but no message content found.
+            # Fall back to session-level fields or full response body.
+            raw_text = (
+                data.get("structured_output")
+                or data.get("output")
+                or data.get("result")
+                or json.dumps(data)
+            )
             logger.warning(
-                "No recognized output field in session response; using full response body"
+                "No Devin message found; falling back to session data (%d chars)",
+                len(raw_text),
             )
 
         logger.info("Raw triage text (%d chars): %.300s", len(raw_text), raw_text)
