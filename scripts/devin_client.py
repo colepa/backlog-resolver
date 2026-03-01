@@ -214,6 +214,24 @@ def _poll_session_until_done(
 
 # --------------- Public API ---------------
 
+def preflight_auth_check() -> None:
+    """
+    Lightweight check that the Devin service token is valid.
+    Hits the sessions endpoint with a GET to verify auth before
+    we spend time building and sending the full triage prompt.
+
+    Raises:
+        RuntimeError – if required env vars are missing.
+        requests.HTTPError – if the token is rejected.
+    """
+    _validate_config()
+    url = _url(_TRIAGE_ENDPOINT)
+    logger.info("Preflight auth check: GET %s", url)
+    resp = _session.get(url)
+    _raise_with_details(resp)
+    logger.info("Preflight auth check passed (HTTP %s)", resp.status_code)
+
+
 def triage_issue(prompt: str) -> dict:
     """
     Send a triage prompt to Devin and return the parsed JSON triage result.
