@@ -73,7 +73,14 @@ _POLL_TASK_ENDPOINT = "/v3/organizations/{org_id}/sessions/{session_id}"
 
 _POLL_INTERVAL_SECS = 5
 _MAX_POLL_SECS = 300
-_TERMINAL_STATUSES = {"finished", "stopped", "failed", "error"}
+# The v3 API "status" field uses: new, claimed, running, exit, error,
+# suspended, resuming.  "finished" lives in the separate "status_detail"
+# field (only populated on get/list).  We treat exit, error, and
+# suspended as terminal for polling purposes.
+_TERMINAL_STATUSES = {"exit", "error", "suspended"}
+_TERMINAL_DETAILS = {"finished", "error", "inactivity", "user_request",
+                     "usage_limit_exceeded", "out_of_credits",
+                     "payment_declined", "org_usage_limit_exceeded"}
 
 
 # --------------- Helpers ---------------
@@ -202,9 +209,12 @@ def _poll_session_until_done(
         _raise_with_details(resp)
         data = resp.json()
         status = data.get("status", "").lower()
-        logger.info("Session %s status: %s", session_id, status)
+        detail = (data.get("status_detail") or "").lower()
+        logger.info("Session %s status: %s  detail: %s", session_id, status, detail)
 
-        if status in _TERMINAL_STATUSES:
+        # The session is done when the top-level status is terminal
+        # OR the detail says "finished" (status may still be "running").
+        if status in _TERMINAL_STATUSES or detail in _TERMINAL_DETAILS:
             return data
 
         time.sleep(_POLL_INTERVAL_SECS)
@@ -233,11 +243,30 @@ def triage_issue(prompt: str) -> dict:
     # OpenAI extraction fallback in intake.py.
     _last_response_body = ""
 
+    # JSON Schema that tells Devin what structured output we expect.
+    _triage_schema = {
+        "type": "object",
+        "properties": {
+            "summary":                    {"type": "string"},
+            "category":                   {"type": "string", "enum": ["bug", "feature", "chore"]},
+            "severity":                   {"type": "string", "enum": ["low", "medium", "high", "critical"]},
+            "effort":                     {"type": "string", "enum": ["S", "M", "L"]},
+            "confidence":                 {"type": "number", "minimum": 0, "maximum": 1},
+            "needs_info":                 {"type": "array", "items": {"type": "string"}},
+            "repro_steps":                {"type": "array", "items": {"type": "string"}},
+            "suggested_labels":           {"type": "array", "items": {"type": "string"}},
+            "recommended_next_action":    {"type": "string", "enum": ["ask_for_info", "ready_for_dev", "defer", "devin_fix"]},
+            "devin_fix_plan":             {"type": "array", "items": {"type": "string"}},
+            "risks":                      {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["summary", "category", "severity", "effort", "confidence",
+                     "needs_info", "recommended_next_action"],
+    }
+
     try:
         payload = {
             "prompt": prompt,
-            # TODO: add any extra fields the Devin API requires, e.g.:
-            # "idempotency_key": "...",
+            "structured_output_schema": _triage_schema,
         }
 
         # 1. Create the Devin session.
@@ -286,10 +315,20 @@ def triage_issue(prompt: str) -> dict:
             )
         # --- End diagnostic ---
 
-        # 3. Extract the triage output text.
-        # Devin may return the structured answer in different fields.
-        # TODO: adjust the key below once you know the real response shape.
-        raw_text = data.get("structured_output") or data.get("output") or data.get("result", "")
+        # 3. Extract the triage output.
+        # When structured_output_schema is provided, the v3 API populates
+        # "structured_output" as a dict on get/list responses.
+        structured = data.get("structured_output")
+        if isinstance(structured, dict) and structured:
+            logger.info("Got structured_output directly from Devin")
+            return structured
+
+        # Fallback: try to find raw text in other fields.
+        raw_text = ""
+        if isinstance(structured, str):
+            raw_text = structured
+        if not raw_text:
+            raw_text = data.get("output") or data.get("result", "")
 
         if not raw_text:
             # No recognized output field — pass the full response so the
