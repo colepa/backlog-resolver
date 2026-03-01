@@ -180,7 +180,11 @@ def extract_triage_fields(raw_text: str) -> dict:
 
 # --------------- Session polling ---------------
 
-def _poll_session_until_done(session_id: str, timeout: int = _MAX_POLL_SECS) -> dict:
+def _poll_session_until_done(
+    session_id: str,
+    poll_url: str | None = None,
+    timeout: int = _MAX_POLL_SECS,
+) -> dict:
     """
     Poll a Devin session until it reaches a terminal state.
     Returns the full session response dict.
@@ -189,7 +193,8 @@ def _poll_session_until_done(session_id: str, timeout: int = _MAX_POLL_SECS) -> 
         TimeoutError – if the session does not finish within *timeout* seconds.
         requests.HTTPError – on HTTP failures.
     """
-    url = _url(_POLL_TASK_ENDPOINT, session_id=session_id)
+    url = poll_url or _url(_POLL_TASK_ENDPOINT, session_id=session_id)
+    logger.info("Polling session %s at %s", session_id, url)
     deadline = time.monotonic() + timeout
 
     while time.monotonic() < deadline:
@@ -231,19 +236,37 @@ def triage_issue(prompt: str) -> dict:
     }
 
     # 1. Create the Devin session.
+    #    Disable auto-redirects so requests doesn't strip the Auth header
+    #    if the API returns a 3xx pointing at the new session URL.
     url = _url(_TRIAGE_ENDPOINT)
     logger.info("POST %s", url)
-    resp = _session.post(url, json=payload)
+    resp = _session.post(url, json=payload, allow_redirects=False)
+    logger.info(
+        "POST response: status=%s location=%s",
+        resp.status_code, resp.headers.get("Location", "(none)"),
+    )
+
+    # If the API redirects (e.g. 303 See Other), follow manually with auth.
+    if resp.is_redirect or resp.status_code in (201, 303):
+        redirect_url = resp.headers.get("Location")
+        if redirect_url and resp.status_code in (301, 302, 303, 307, 308):
+            logger.info("Following redirect to %s", redirect_url)
+            resp = _session.get(redirect_url)  # _session keeps auth headers
+
     _raise_with_details(resp)
     create_data = resp.json()
+    logger.info("Session creation response keys: %s", list(create_data.keys()))
 
     session_id = create_data.get("session_id") or create_data.get("id")
     if not session_id:
         raise ValueError(f"Devin session creation returned no session_id: {create_data}")
     logger.info("Created Devin triage session: %s", session_id)
 
+    # Use the self-link URL from the response if available, otherwise build our own.
+    poll_url = create_data.get("url") or None
+
     # 2. Poll until the session reaches a terminal state.
-    data = _poll_session_until_done(session_id)
+    data = _poll_session_until_done(session_id, poll_url=poll_url)
 
     # 3. Extract the triage output text.
     # Devin may return the structured answer in different fields.
