@@ -264,6 +264,15 @@ def triage_issue(prompt: str) -> dict:
         create_data = resp.json()
         logger.info("Session creation response keys: %s", list(create_data.keys()))
 
+        # --- Diagnostic: dump session creation response so we can find auth/polling hints ---
+        for key, val in create_data.items():
+            preview = str(val)[:200] if val is not None else "None"
+            logger.info(
+                "SESSION CREATE  key=%-25s  type=%-10s  preview=%s",
+                key, type(val).__name__, preview,
+            )
+        # --- End diagnostic ---
+
         session_id = create_data.get("session_id") or create_data.get("id")
         if not session_id:
             raise ValueError(f"Devin session creation returned no session_id: {create_data}")

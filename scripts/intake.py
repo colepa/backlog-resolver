@@ -33,7 +33,7 @@ from scripts.github_client import (
     add_labels,
     post_comment,
 )
-from scripts.devin_client import triage_issue, create_fix_task, extract_triage_fields
+from scripts.devin_client import triage_issue, create_fix_task, extract_triage_fields, preflight_auth_check
 from scripts.prompt_templates import TRIAGE_PROMPT, FIX_PROMPT
 
 # --------------- Logging ---------------
@@ -215,6 +215,26 @@ def run() -> None:
         body=body,
         comments=comments_text,
     )
+
+    # Pre-flight: verify token works before sending the full triage prompt.
+    try:
+        preflight_auth_check()
+    except Exception as exc:
+        logger.error("Preflight auth check failed: %s", exc)
+        post_comment(
+            REPO_FULL_NAME,
+            ISSUE_NUMBER,
+            f"⚠️ **Triage failed** — Devin API authentication rejected.\n\n"
+            f"Error: `{exc}`\n\n"
+            "**Checklist for maintainers:**\n"
+            "1. Is `DEVIN_SERVICE_TOKEN` an org-scoped service-user token "
+            "(not a personal API key)?\n"
+            "2. Does `DEVIN_ORG_ID` match the org the token belongs to? "
+            "(Settings → API in the Devin dashboard)\n"
+            "3. Has the token been rotated or revoked?\n"
+            "4. Does the token have `sessions:read` and `sessions:write` scopes?",
+        )
+        return
 
     try:
         triage = triage_issue(prompt)
