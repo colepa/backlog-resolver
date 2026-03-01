@@ -221,9 +221,23 @@ def run() -> None:
     except (ValueError, json.JSONDecodeError) as exc:
         # Devin returned something that is not valid JSON.
         # Fall back to OpenAI extraction from the raw response.
-        logger.warning("Triage JSON parse failed: %s — trying OpenAI extraction", exc)
+        raw_text = getattr(exc, "raw_text", "")
+        logger.warning(
+            "Triage JSON parse failed: %s — raw_text length=%d",
+            exc, len(raw_text) if raw_text else 0,
+        )
+        if not raw_text:
+            # No Devin response text to extract from — nothing for OpenAI to work with.
+            logger.error("No raw response text available for extraction fallback")
+            post_comment(
+                REPO_FULL_NAME,
+                ISSUE_NUMBER,
+                "⚠️ **Triage failed** — Devin did not return usable output. "
+                "A maintainer will triage this issue manually.",
+            )
+            return
         try:
-            raw_text = getattr(exc, "raw_text", "") or str(exc)
+            logger.info("Sending %d chars to OpenAI extraction fallback", len(raw_text))
             triage = extract_triage_fields(raw_text)
         except Exception as extract_exc:
             logger.error("OpenAI extraction also failed: %s", extract_exc)

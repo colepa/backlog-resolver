@@ -281,11 +281,14 @@ def triage_issue(prompt: str) -> dict:
             "No recognized output field in session response; using full response body"
         )
 
+    logger.info("Raw triage text (%d chars): %.300s", len(raw_text), raw_text)
+
     try:
         triage = _parse_json_from_text(raw_text)
     except (ValueError, json.JSONDecodeError) as exc:
         # Attach the raw text so callers can attempt extraction fallback.
-        exc.raw_text = raw_text
+        # Guard against empty string — always give the fallback something useful.
+        exc.raw_text = raw_text or json.dumps(data)
         raise
     logger.info("Triage result parsed successfully")
     return triage
