@@ -36,6 +36,8 @@ def _validate_config() -> None:
     missing = []
     if not DEVIN_SERVICE_TOKEN:
         missing.append("DEVIN_SERVICE_TOKEN")
+    if not DEVIN_ORG_ID:
+        missing.append("DEVIN_ORG_ID")
     if missing:
         raise RuntimeError(
             f"Missing required environment variable(s): {', '.join(missing)}. "
@@ -64,8 +66,10 @@ _session.headers.update(
 # Docs: https://docs.devin.ai  (org scope)
 # The service-user token identifies the org — no org name in the URL.
 # ------------------------------------------------------------------
-_TRIAGE_ENDPOINT = "/v3/organizations/sessions"
-_FIX_TASK_ENDPOINT = "/v3/organizations/sessions"
+# POST endpoints require {org_id} in the path (confirmed working).
+# GET endpoints return 403 with org_id, so we omit it for polling.
+_TRIAGE_ENDPOINT = "/v3/organizations/{org_id}/sessions"
+_FIX_TASK_ENDPOINT = "/v3/organizations/{org_id}/sessions"
 _POLL_TASK_ENDPOINT = "/v3/organizations/sessions/{session_id}"
 
 
@@ -77,8 +81,8 @@ _TERMINAL_STATUSES = {"finished", "stopped", "failed", "error"}
 # --------------- Helpers ---------------
 
 def _url(path: str, **kwargs) -> str:
-    """Build a full Devin API URL, filling in any path parameters."""
-    filled = path.format(**kwargs)
+    """Build a full Devin API URL, filling in {org_id} and any extras."""
+    filled = path.format(org_id=DEVIN_ORG_ID, **kwargs)
     return f"{DEVIN_API_BASE_URL.rstrip('/')}{filled}"
 
 
@@ -214,20 +218,16 @@ def _poll_session_until_done(
 
 def preflight_auth_check() -> None:
     """
-    Lightweight check that the Devin service token is valid.
-    Hits the sessions endpoint with a GET to verify auth before
-    we spend time building and sending the full triage prompt.
+    Validate that required Devin env vars are present.
+    We skip a network call because the Devin API returns 403 on GET
+    with org_id and 404 without it — the POST to create a session
+    is the real auth check.
 
     Raises:
         RuntimeError – if required env vars are missing.
-        requests.HTTPError – if the token is rejected.
     """
     _validate_config()
-    url = _url(_TRIAGE_ENDPOINT)
-    logger.info("Preflight auth check: GET %s", url)
-    resp = _session.get(url)
-    _raise_with_details(resp)
-    logger.info("Preflight auth check passed (HTTP %s)", resp.status_code)
+    logger.info("Preflight config check passed")
 
 
 def triage_issue(prompt: str) -> dict:
