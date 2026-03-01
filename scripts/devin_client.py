@@ -269,8 +269,9 @@ def triage_issue(prompt: str) -> dict:
             raise ValueError(f"Devin session creation returned no session_id: {create_data}")
         logger.info("Created Devin triage session: %s", session_id)
 
-        # Use the self-link URL from the response if available, otherwise build our own.
-        poll_url = create_data.get("url") or None
+        # Always use the API endpoint for polling — create_data["url"] is the
+        # web-app URL (app.devin.ai), not the API URL (api.devin.ai).
+        poll_url = _url(_POLL_TASK_ENDPOINT, session_id=session_id)
 
         # 2. Poll until the session reaches a terminal state.
         data = _poll_session_until_done(session_id, poll_url=poll_url)
