@@ -74,7 +74,7 @@ _SESSIONS_ENDPOINT = "/v3/organizations/{org_id}/sessions"
 
 _POLL_INTERVAL_SECS = 5
 _MAX_POLL_SECS = 300
-_TERMINAL_STATUSES = {"finished", "stopped", "failed", "error"}
+_TERMINAL_STATUSES = {"finished", "completed", "stopped", "failed", "error"}
 
 
 # --------------- Helpers ---------------
