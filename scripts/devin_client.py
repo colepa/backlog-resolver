@@ -229,69 +229,81 @@ def triage_issue(prompt: str) -> dict:
     _validate_config()
     logger.info("Sending triage prompt to Devin (%d chars)", len(prompt))
 
-    payload = {
-        "prompt": prompt,
-        # TODO: add any extra fields the Devin API requires, e.g.:
-        # "idempotency_key": "...",
-    }
-
-    # 1. Create the Devin session.
-    #    Disable auto-redirects so requests doesn't strip the Auth header
-    #    if the API returns a 3xx pointing at the new session URL.
-    url = _url(_TRIAGE_ENDPOINT)
-    logger.info("POST %s", url)
-    resp = _session.post(url, json=payload, allow_redirects=False)
-    logger.info(
-        "POST response: status=%s location=%s",
-        resp.status_code, resp.headers.get("Location", "(none)"),
-    )
-
-    # If the API redirects (e.g. 303 See Other), follow manually with auth.
-    if resp.is_redirect or resp.status_code in (201, 303):
-        redirect_url = resp.headers.get("Location")
-        if redirect_url and resp.status_code in (301, 302, 303, 307, 308):
-            logger.info("Following redirect to %s", redirect_url)
-            resp = _session.get(redirect_url)  # _session keeps auth headers
-
-    _raise_with_details(resp)
-    create_data = resp.json()
-    logger.info("Session creation response keys: %s", list(create_data.keys()))
-
-    session_id = create_data.get("session_id") or create_data.get("id")
-    if not session_id:
-        raise ValueError(f"Devin session creation returned no session_id: {create_data}")
-    logger.info("Created Devin triage session: %s", session_id)
-
-    # Use the self-link URL from the response if available, otherwise build our own.
-    poll_url = create_data.get("url") or None
-
-    # 2. Poll until the session reaches a terminal state.
-    data = _poll_session_until_done(session_id, poll_url=poll_url)
-
-    # 3. Extract the triage output text.
-    # Devin may return the structured answer in different fields.
-    # TODO: adjust the key below once you know the real response shape.
-    raw_text = data.get("structured_output") or data.get("output") or data.get("result", "")
-
-    if not raw_text:
-        # No recognized output field — pass the full response so the
-        # extraction fallback has something meaningful to work with.
-        raw_text = json.dumps(data)
-        logger.warning(
-            "No recognized output field in session response; using full response body"
-        )
-
-    logger.info("Raw triage text (%d chars): %.300s", len(raw_text), raw_text)
+    # Track raw response data so we can attach it to any exception for the
+    # OpenAI extraction fallback in intake.py.
+    _last_response_body = ""
 
     try:
+        payload = {
+            "prompt": prompt,
+            # TODO: add any extra fields the Devin API requires, e.g.:
+            # "idempotency_key": "...",
+        }
+
+        # 1. Create the Devin session.
+        #    Disable auto-redirects so requests doesn't strip the Auth header
+        #    if the API returns a 3xx pointing at the new session URL.
+        url = _url(_TRIAGE_ENDPOINT)
+        logger.info("POST %s", url)
+        resp = _session.post(url, json=payload, allow_redirects=False)
+        _last_response_body = resp.text
+        logger.info(
+            "POST response: status=%s location=%s body=%.300s",
+            resp.status_code, resp.headers.get("Location", "(none)"), _last_response_body,
+        )
+
+        # If the API redirects (e.g. 303 See Other), follow manually with auth.
+        if resp.is_redirect or resp.status_code in (201, 303):
+            redirect_url = resp.headers.get("Location")
+            if redirect_url and resp.status_code in (301, 302, 303, 307, 308):
+                logger.info("Following redirect to %s", redirect_url)
+                resp = _session.get(redirect_url)  # _session keeps auth headers
+                _last_response_body = resp.text
+
+        _raise_with_details(resp)
+        create_data = resp.json()
+        logger.info("Session creation response keys: %s", list(create_data.keys()))
+
+        session_id = create_data.get("session_id") or create_data.get("id")
+        if not session_id:
+            raise ValueError(f"Devin session creation returned no session_id: {create_data}")
+        logger.info("Created Devin triage session: %s", session_id)
+
+        # Use the self-link URL from the response if available, otherwise build our own.
+        poll_url = create_data.get("url") or None
+
+        # 2. Poll until the session reaches a terminal state.
+        data = _poll_session_until_done(session_id, poll_url=poll_url)
+        _last_response_body = json.dumps(data)
+
+        # 3. Extract the triage output text.
+        # Devin may return the structured answer in different fields.
+        # TODO: adjust the key below once you know the real response shape.
+        raw_text = data.get("structured_output") or data.get("output") or data.get("result", "")
+
+        if not raw_text:
+            # No recognized output field — pass the full response so the
+            # extraction fallback has something meaningful to work with.
+            raw_text = json.dumps(data)
+            logger.warning(
+                "No recognized output field in session response; using full response body"
+            )
+
+        logger.info("Raw triage text (%d chars): %.300s", len(raw_text), raw_text)
+
         triage = _parse_json_from_text(raw_text)
+        logger.info("Triage result parsed successfully")
+        return triage
+
     except (ValueError, json.JSONDecodeError) as exc:
-        # Attach the raw text so callers can attempt extraction fallback.
-        # Guard against empty string — always give the fallback something useful.
-        exc.raw_text = raw_text or json.dumps(data)
+        # Attach whatever response data we have so the caller's OpenAI
+        # extraction fallback has something meaningful to work with.
+        exc.raw_text = _last_response_body
+        logger.error(
+            "triage_issue failed (%s). Attached raw_text (%d chars): %.300s",
+            exc, len(_last_response_body), _last_response_body,
+        )
         raise
-    logger.info("Triage result parsed successfully")
-    return triage
 
 
 def create_fix_task(
