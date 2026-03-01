@@ -68,7 +68,6 @@ _session.headers.update(
 # ------------------------------------------------------------------
 # POST and GET both require {org_id} in the path.
 _SESSIONS_ENDPOINT = "/v3/organizations/{org_id}/sessions"
-_SESSION_DETAIL_ENDPOINT = "/v3/organizations/{org_id}/sessions/{session_id}"
 
 
 _POLL_INTERVAL_SECS = 5
@@ -180,25 +179,18 @@ def extract_triage_fields(raw_text: str) -> dict:
 
 # --------------- Session polling ---------------
 
+# Output fields that Devin may populate once the work is done.
+# The session status can remain "running" even after output is ready,
+# so we treat non-empty output as an implicit completion signal.
+_OUTPUT_FIELDS = ("structured_output", "output", "result")
+
+
 def _get_session(session_id: str) -> dict | None:
     """
-    Fetch a single Devin session by ID.
-    Uses the detail endpoint first; falls back to the list endpoint.
+    Fetch a single Devin session by ID from the list endpoint.
+    The single-session GET returns 403 for service-user tokens,
+    so we list and filter instead.
     """
-    # Try the single-session GET endpoint.
-    try:
-        url = _url(_SESSION_DETAIL_ENDPOINT, session_id=session_id)
-        resp = _session.get(url)
-        if resp.ok:
-            return resp.json()
-        logger.warning(
-            "Single-session GET returned %s — falling back to list endpoint",
-            resp.status_code,
-        )
-    except Exception as exc:
-        logger.warning("Single-session GET failed (%s) — falling back to list", exc)
-
-    # Fallback: list sessions and filter.
     url = _url(_SESSIONS_ENDPOINT)
     resp = _session.get(url)
     _raise_with_details(resp)
@@ -234,9 +226,10 @@ def _poll_session_until_done(
             continue
 
         status = session.get("status", "").lower()
-        logger.info("Session %s status: %s", session_id, status)
+        has_output = any(session.get(f) for f in _OUTPUT_FIELDS)
+        logger.info("Session %s status: %s  has_output: %s", session_id, status, has_output)
 
-        if status in _TERMINAL_STATUSES:
+        if status in _TERMINAL_STATUSES or has_output:
             return session
 
         time.sleep(_POLL_INTERVAL_SECS)
