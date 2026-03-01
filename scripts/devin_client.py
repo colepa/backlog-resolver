@@ -385,9 +385,8 @@ def create_fix_task(
 
     payload = {
         "prompt": prompt,
-        # TODO: add any extra fields required, e.g.:
-        # "repository": repo_full_name,
-        # "branch": branch_name,
+        "repository": repo_full_name,
+        "branch": branch_name,
     }
 
     resp = _session.post(_url(_SESSIONS_ENDPOINT), json=payload)
