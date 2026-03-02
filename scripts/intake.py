@@ -47,6 +47,8 @@ logger = logging.getLogger("intake")
 ISSUE_NUMBER = int(os.environ.get("ISSUE_NUMBER", "0"))
 REPO_FULL_NAME = os.environ.get("REPO_FULL_NAME", "")
 DEVIN_FIX_ENABLED = os.environ.get("DEVIN_FIX_ENABLED", "true").lower() == "true"
+TRIGGER_ACTION = os.environ.get("TRIGGER_ACTION", "")
+TRIGGER_LABEL = os.environ.get("TRIGGER_LABEL", "")
 
 
 # ====================================================================
@@ -195,9 +197,19 @@ def run() -> None:
 
     logger.info("=== Issue Intake: %s#%s ===", REPO_FULL_NAME, ISSUE_NUMBER)
 
-    # ---- 1. Loop guard: skip if already triaged ----
+    # ---- 1. Detect label-triggered runs ----
+    is_label_trigger = TRIGGER_ACTION == "labeled" and TRIGGER_LABEL.startswith("devin:")
+    force_fix = TRIGGER_LABEL == "devin:fix"
+
+    if is_label_trigger:
+        logger.info(
+            "Label-triggered run: action=%s label=%s force_fix=%s",
+            TRIGGER_ACTION, TRIGGER_LABEL, force_fix,
+        )
+
+    # ---- 1b. Loop guard: skip if already triaged (unless label-triggered) ----
     existing_labels = get_issue_labels(REPO_FULL_NAME, ISSUE_NUMBER)
-    if "devin:triaged" in existing_labels:
+    if "devin:triaged" in existing_labels and not is_label_trigger:
         logger.info("Issue already has 'devin:triaged' label — skipping.")
         return
 
@@ -294,12 +306,14 @@ def run() -> None:
     add_labels(REPO_FULL_NAME, ISSUE_NUMBER, labels)
     logger.info("Triage complete. Labels applied: %s", labels)
 
-    # ---- 5. Auto-fix (only when safe) ----
-    if not _should_auto_fix(triage):
+    # ---- 5. Auto-fix (only when safe, or forced via devin:fix label) ----
+    if force_fix:
+        logger.info("Fix forced via devin:fix label — skipping safety checks.")
+    elif not _should_auto_fix(triage):
         logger.info("Auto-fix conditions not met — done.")
         return
-
-    logger.info("Auto-fix conditions met — queuing Devin fix task.")
+    else:
+        logger.info("Auto-fix conditions met — queuing Devin fix task.")
 
     branch_name = f"devin/fix-{ISSUE_NUMBER}-{_slugify(title)}"
     fix_plan_text = "\n".join(

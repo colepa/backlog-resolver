@@ -57,6 +57,21 @@ If Devin recommends `devin_fix` **and** all of these are true:
 
 **Devin never pushes to main.** A human must review and merge every PR.
 
+### C) Label-Triggered Triage & Fix (human-in-the-loop)
+
+Maintainers can manually trigger the pipeline on **any** issue — including
+old, pre-existing ones — by adding a label:
+
+| Label | Effect |
+|-------|--------|
+| `devin:triage` | Runs (or re-runs) triage on the issue. Posts a fresh Triage Report and updates labels. |
+| `devin:fix` | Runs triage **and** forces Devin to implement a fix, even if the normal safety checks (effort=S, confidence≥0.7) aren't met. |
+
+This lets the team work through a stale backlog at their own pace: scan
+issues, slap a label on the ones worth resolving, and let the automation
+handle the rest. The dispatch workflow only fires for labels prefixed with
+`devin:`, so other labels won't trigger unnecessary runs.
+
 ---
 
 ## Project Structure

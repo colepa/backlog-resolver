@@ -14,7 +14,7 @@ name: Forward issues to Backlog Resolver
 
 on:
   issues:
-    types: [opened, edited, reopened]
+    types: [opened, edited, reopened, labeled]
 
 env:
   # ── Change this to wherever your backlog-resolver repo lives ──
@@ -22,6 +22,10 @@ env:
 
 jobs:
   dispatch:
+    # Only dispatch for open/edit/reopen OR when a devin: label is added.
+    if: >-
+      github.event.action != 'labeled' ||
+      startsWith(github.event.label.name, 'devin:')
     runs-on: ubuntu-latest
     steps:
       - name: Send repository_dispatch to backlog-resolver
@@ -33,5 +37,7 @@ jobs:
           client-payload: |
             {
               "repo": "${{ github.repository }}",
-              "issue_number": ${{ github.event.issue.number }}
+              "issue_number": ${{ github.event.issue.number }},
+              "action": "${{ github.event.action }}",
+              "label": "${{ github.event.label.name || '' }}"
             }

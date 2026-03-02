@@ -55,4 +55,6 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ISSUE_NUMBER: ${{ github.event.client_payload.issue_number }}
           REPO_FULL_NAME: ${{ github.event.client_payload.repo }}
+          TRIGGER_ACTION: ${{ github.event.client_payload.action || '' }}
+          TRIGGER_LABEL: ${{ github.event.client_payload.label || '' }}
         run: python -m scripts.intake
