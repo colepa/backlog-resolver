@@ -121,7 +121,16 @@ def _parse_json_from_text(text: str) -> dict:
         lines = [l for l in lines if not l.strip().startswith("```")]
         cleaned = "\n".join(lines).strip()
 
-    return json.loads(cleaned)  # raises ValueError / JSONDecodeError on failure
+    result = json.loads(cleaned)  # raises ValueError / JSONDecodeError on failure
+    # Handle double-encoded JSON: the API sometimes returns a JSON string
+    # whose content is itself the JSON object we need.
+    if isinstance(result, str):
+        result = json.loads(result)
+    if not isinstance(result, dict):
+        raise ValueError(
+            f"Expected a JSON object but got {type(result).__name__}: {str(result)[:200]}"
+        )
+    return result
 
 
 # --------------- Extraction fallback ---------------
